@@ -30,7 +30,7 @@ module Reactive.Banana.Frameworks (
     -- ** Utility functions
     -- | This section collects a few convience functions
     -- built from the core functions.
-    newEvent, mapEventIO, newBehavior,
+    newEvent,newEventsNamed,registerE,onChange, mapEventIO, newBehavior,
 
     -- * Running event networks
     EventNetwork, actuate, pause,
@@ -43,9 +43,12 @@ import           Control.Event.Handler
 import           Control.Monad
 import           Control.Monad.IO.Class
 import           Data.IORef
+import           Reactive.Banana.Prim.Cached
 import           Reactive.Banana.Combinators
 import qualified Reactive.Banana.Internal.Combinators as Prim
+import qualified Reactive.Banana.Prim.IO as Prim
 import           Reactive.Banana.Types
+import qualified Data.Map as Map
 
 
 {-----------------------------------------------------------------------------
@@ -151,16 +154,16 @@ does so as well.
 Your event-based framework will have to handle this situation.
 
 -}
-reactimate :: Event (IO ()) -> MomentIO ()
-reactimate = MIO . Prim.addReactimate . Prim.mapE return . unE
+reactimate :: MonadMomentIO m => Event (IO ()) -> m ()
+reactimate = liftMomentIO . MIO . Prim.addReactimate . Prim.mapE return . unE
 
 -- | Output.
 -- Execute the 'IO' action whenever the event occurs.
 --
 -- This version of 'reactimate' can deal with values obtained
 -- from the 'changes' function.
-reactimate' :: Event (Future (IO ())) -> MomentIO ()
-reactimate' = MIO . Prim.addReactimate . Prim.mapE unF . unE
+reactimate' :: MonadMomentIO m => Event (Future (IO ())) -> m ()
+reactimate' = liftMomentIO . MIO . Prim.addReactimate . Prim.mapE unF . unE
 
 
 -- | Input,
@@ -169,8 +172,8 @@ reactimate' = MIO . Prim.addReactimate . Prim.mapE unF . unE
 -- When the event network is actuated,
 -- this will register a callback function such that
 -- an event will occur whenever the callback function is called.
-fromAddHandler ::AddHandler a -> MomentIO (Event a)
-fromAddHandler = MIO . fmap E . Prim.fromAddHandler
+fromAddHandler :: MonadMomentIO m => AddHandler a -> m (Event a)
+fromAddHandler = liftMomentIO . MIO . fmap E . Prim.fromAddHandler
 
 -- | Input,
 -- obtain a 'Behavior' by frequently polling mutable data, like the current time.
@@ -271,8 +274,8 @@ imposeChanges b e = B $ Prim.imposeChanges (unB b) (Prim.mapE (const ()) (unE e)
 -- it may also happen that the actions are not executed at all.
 -- If you want a reliable way to turn events into 'IO' actions
 -- use the 'reactimate' and 'reactimate'' functions.
-execute :: Event (MomentIO a) -> MomentIO (Event a)
-execute = MIO . fmap E . Prim.executeE . Prim.mapE unMIO . unE
+execute :: MonadMomentIO m => Event (MomentIO a) -> m (Event a)
+execute = liftMomentIO . MIO . fmap E . Prim.executeE . Prim.mapE unMIO . unE
 
 -- $liftIO
 --
@@ -338,8 +341,8 @@ showNetwork = Prim.showNetwork . unEN
 --
 -- This function is mainly useful for passing callback functions
 -- inside a 'reactimate'.
-newEvent :: MomentIO (Event a, Handler a)
-newEvent = do
+newEvent :: MonadMomentIO m =>  m  (Event a, Handler a)
+newEvent = liftMomentIO $ do
     (addHandler, fire) <- liftIO $ newAddHandler
     e <- fromAddHandler addHandler
     return (e,fire)
@@ -353,7 +356,7 @@ newEvent = do
 -- >     (e, fire) <- newEvent
 -- >     b         <- stepper a e
 -- >     return (b, fire)
-newBehavior :: a -> MomentIO (Behavior a, Handler a)
+newBehavior :: MonadMomentIO m => a ->   m (Behavior a, Handler a)
 newBehavior a = do
     (e, fire) <- newEvent
     b         <- stepper a e
@@ -372,8 +375,8 @@ newBehavior a = do
 -- >     (e2, handler) <- newEvent
 -- >     reactimate $ (\a -> f a >>= handler) <$> e1
 -- >     return e2
-mapEventIO :: (a -> IO b) -> Event a -> MomentIO (Event b)
-mapEventIO f e1 = do
+mapEventIO :: MonadMomentIO m => (a -> IO b) -> Event a -> m (Event b)
+mapEventIO f e1 = liftMomentIO $ do
     (e2, handler) <- newEvent
     reactimate $ (\a -> f a >>= handler) <$> e1
     return e2
@@ -390,7 +393,6 @@ interpretFrameworks f xs = do
     network                   <- compile $ do
         e <- fromAddHandler addHandler
         reactimate $ fmap (\b -> modifyIORef output (++[b])) (f e)
-
     actuate network
     bs <- forM xs $ \x -> do
         runHandlers x
@@ -398,6 +400,43 @@ interpretFrameworks f xs = do
         writeIORef output []
         return bs
     return bs
+
+registerE :: MonadMomentIO m => Event a -> Handler a -> m (m ())
+registerE e h = liftMomentIO $ do
+  -- p <- runCached (unE e)
+  -- Prim.addHandler p h
+  return $ return ()
+
+
+onChange :: MonadMomentIO m => Behavior a -> Handler a -> m ()
+onChange b h = liftMomentIO $ void $ do
+     bh <- changes (fmap h b)
+     reactimate'  bh
+
+{-
+newEvent :: MomentIO (Event a, Handler a)
+newEvent = do
+    (addHandler, fire) <- liftIO $ newAddHandler
+    e <- fromAddHandler addHandler
+    return (e,fire)
+-}
+
+newEventsNamed :: (MonadMomentIO m ,Ord name
+    ) => Handler (name, Event a, Handler a)   -- ^ Initialization procedure.
+    -> m (name -> MomentIO (Event a))                 -- ^ Series of events.
+newEventsNamed init = liftMomentIO $ do
+    eventsRef <- liftIO$ newIORef Map.empty
+    return $ \name -> fromAddHandler =<<  (runCached . cache $ do
+        events <- liftIO$ readIORef eventsRef
+        case Map.lookup name events of
+            Just p  -> return p
+            Nothing -> do
+                (p, fire) <- liftIO$ newAddHandler
+                liftIO$ writeIORef eventsRef $ Map.insert name p  events
+                e <- fromAddHandler p
+                liftIO$ init (name, e , fire)
+                return p)
+
 
 -- | Simple way to write a single event handler with
 -- functional reactive programming.

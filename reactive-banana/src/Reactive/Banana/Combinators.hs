@@ -23,14 +23,14 @@ module Reactive.Banana.Combinators (
     apply,
 
     -- ** Moment and accumulation
-    Moment, MonadMoment(..),
+    Moment, MonadMoment(..),MonadMomentIO(..),
     accumE, stepper,
 
     -- ** Recursion
     -- $recursion
 
     -- ** Higher-order
-    valueB, valueBLater, observeE, switchE, switchB,
+    currentValue,valueB, valueBLater, observeE, switchE, switchB,
 
     -- * Derived Combinators
     -- ** Infix operators
@@ -217,6 +217,8 @@ and vice versa.
 valueB :: MonadMoment m => Behavior a -> m a
 valueB = liftMoment . M . Prim.valueB . unB
 
+currentValue :: MonadMoment m => Behavior a -> m a
+currentValue = valueB
 -- | Obtain the value of the 'Behavior' at a given moment in time.
 -- Semantically, it corresponds to
 --

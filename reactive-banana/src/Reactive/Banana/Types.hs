@@ -4,7 +4,7 @@
 module Reactive.Banana.Types (
     -- | Primitive types.
     Event(..), Behavior(..),
-    Moment(..), MomentIO(..), MonadMoment(..),
+    Moment(..), MomentIO(..), MonadMoment(..),MonadMomentIO(..) ,
     Future(..),
     ) where
 
@@ -123,8 +123,13 @@ Unlike the 'Moment' monad, it need not be pure anymore.
 class Monad m => MonadMoment m where
     liftMoment :: Moment a -> m a
 
+class MonadMoment m => MonadMomentIO m where
+  liftMomentIO :: MomentIO a -> m a
+
 instance MonadMoment Moment   where liftMoment = id
 instance MonadMoment MomentIO where liftMoment = MIO . unM
+
+instance MonadMomentIO MomentIO where liftMomentIO = id
 
 -- boilerplate class instances
 instance Functor Moment where fmap f = M . fmap f . unM
@@ -144,3 +149,4 @@ instance Applicative MomentIO where
     pure    = MIO . pure
     f <*> a = MIO $ unMIO f <*> unMIO a
 instance MonadFix MomentIO where mfix f = MIO $ mfix (unMIO . f)
+
